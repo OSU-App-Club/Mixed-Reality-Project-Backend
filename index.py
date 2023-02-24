@@ -1,12 +1,108 @@
 import boto3
 import logging
 from botocore.exceptions import ClientError
+import pygltflib
+import numpy as np
+from stl import mesh
+from math import sqrt
 
 STL_BUCKET_NAME = 'osuapp-winter2023-aws-backend'
 GLTF_BUCKET_NAME = 'osuapp-winter2023-gltf'
-CSV_BUCKET_NAME = 'metadata-cvs-out'
+CSV_BUCKET_NAME = 'metadata-cvs-out' 
 
 s3 = boto3.client('s3')
+
+def convert_stl_to_glb(file: str):
+    stl_mesh = mesh.Mesh.from_file(file)
+
+    stl_points = []
+    for i in range(0, len(stl_mesh.points)):  # Convert points into correct numpy array
+        stl_points.append(
+            [stl_mesh.points[i][0], stl_mesh.points[i][1], stl_mesh.points[i][2]])
+        stl_points.append(
+            [stl_mesh.points[i][3], stl_mesh.points[i][4], stl_mesh.points[i][5]])
+        stl_points.append(
+            [stl_mesh.points[i][6], stl_mesh.points[i][7], stl_mesh.points[i][8]])
+
+    points = np.array(
+        stl_points,
+        dtype="float32",
+    )
+
+    stl_normals = []
+    for i in range(0, len(stl_mesh.normals)):  # Convert points into correct numpy array
+        normal_vector = [stl_mesh.normals[i][0],
+                         stl_mesh.normals[i][1], stl_mesh.normals[i][2]]
+        normal_vector = normalize(normal_vector)
+        stl_normals.append(normal_vector)
+        stl_normals.append(normal_vector)
+        stl_normals.append(normal_vector)
+
+    normals = np.array(
+        stl_normals,
+        dtype="float32"
+    )
+
+    points_binary_blob = points.tobytes()
+    normals_binary_blob = normals.tobytes()
+
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[0])],
+        nodes=[pygltflib.Node(mesh=0)],
+        meshes=[
+            pygltflib.Mesh(
+                primitives=[
+                    pygltflib.Primitive(
+                        attributes=pygltflib.Attributes(POSITION=0, NORMAL=1), indices=None
+                    )
+                ]
+            )
+        ],
+        accessors=[
+            pygltflib.Accessor(
+                bufferView=0,
+                componentType=pygltflib.FLOAT,
+                count=len(points),
+                type=pygltflib.VEC3,
+                max=points.max(axis=0).tolist(),
+                min=points.min(axis=0).tolist(),
+            ),
+            pygltflib.Accessor(
+                bufferView=1,
+                componentType=pygltflib.FLOAT,
+                count=len(normals),
+                type=pygltflib.VEC3,
+                max=None,
+                min=None,
+            ),
+        ],
+        bufferViews=[
+            pygltflib.B
+            ufferView(
+                buffer=0,
+                byteOffset=0,
+                byteLength=len(points_binary_blob),
+                target=pygltflib.ARRAY_BUFFER,
+            ),
+            pygltflib.BufferView(
+                buffer=0,
+                byteOffset=len(points_binary_blob),
+                byteLength=len(normals_binary_blob),
+                target=pygltflib.ARRAY_BUFFER,
+            ),
+        ],
+        buffers=[
+            pygltflib.Buffer(
+                byteLength=len(points_binary_blob) + len(normals_binary_blob)
+            )
+        ],
+    )
+    gltf.set_binary_blob(points_binary_blob + normals_binary_blob)
+    glb_filename = f'{file}.glb'
+    gltf.save(glb_filename)
+
+    return glb_filename
 
 def _test_():
     # Grab the key from the event that was triggered (filename that was placed in the .stl s3 bucket == key?)
@@ -16,8 +112,8 @@ def _test_():
     stl_resp = s3.get_object(bucket=STL_BUCKET_NAME, key=key)
     lcl_stl_file = stl_resp['Body'].read().decode('utf-8')
 
-    # TODO: Convert .stl to .gltf
-    lcl_gltf_file = 'TODO'
+    # Convert .stl to .gltf
+    lcl_gltf_file = convert_stl_to_glb(lcl_stl_file)
 
     # Upload the local .gltf convert file to the gltf s3 bucket
     # TODO await for the uplaod so we can pull from the s3 bucket
